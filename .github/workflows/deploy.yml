@@ -14,18 +14,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout frontend repository
       - name: Checkout frontend code
         uses: actions/checkout@v4
 
+      # 2. Configure Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # 3. Login to Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # 4. Build and push frontend image
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
         with:
@@ -35,7 +39,8 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-frontend:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-frontend:${{ github.sha }}
 
-      - name: Deploy frontend and reload Nginx
+      # 5. Deploy frontend container to EC2
+      - name: Deploy frontend to EC2
         uses: appleboy/ssh-action@v1.2.0
         env:
           IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/task-manager-frontend:${{ github.sha }}
@@ -50,21 +55,41 @@ jobs:
             echo "Pulling frontend image..."
             sudo docker pull "$IMAGE"
 
-            echo "Replacing frontend container..."
+            echo "Stopping old frontend container..."
             sudo docker stop task-manager-frontend-container || true
+
+            echo "Removing old frontend container..."
             sudo docker rm task-manager-frontend-container || true
 
+            echo "Starting new frontend container..."
             sudo docker run -d \
               --name task-manager-frontend-container \
               --restart unless-stopped \
               -p 127.0.0.1:4173:4173 \
               "$IMAGE"
 
-            echo "Checking Nginx configuration..."
+            echo "Checking frontend container..."
+            sudo docker ps --filter name=task-manager-frontend-container
+
+            echo "Testing Nginx configuration..."
             sudo nginx -t
 
-            echo "Reloading existing Nginx service..."
-            sudo systemctl reload nginx
+            echo "Enabling Nginx at boot..."
+            sudo systemctl enable nginx
 
-            echo "Checking deployment..."
-            sudo docker ps
+            echo "Starting or reloading Nginx..."
+            if sudo systemctl is-active --quiet nginx; then
+              sudo systemctl reload nginx
+            else
+              sudo systemctl start nginx
+            fi
+
+            echo "Checking Nginx status..."
+            sudo systemctl is-active nginx
+
+            echo "Testing frontend response through Nginx..."
+            curl --fail --silent --show-error \
+              http://127.0.0.1/ \
+              --output /dev/null
+
+            echo "Frontend deployment completed successfully."
